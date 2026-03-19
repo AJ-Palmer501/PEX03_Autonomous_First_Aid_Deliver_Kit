@@ -1,4 +1,4 @@
-#Test of git repo
+#Next test of git push
 import logging
 import time
 import cv2
