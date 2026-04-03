@@ -1,4 +1,3 @@
-#Next test of git push
 import logging
 import time
 import cv2
@@ -29,7 +28,7 @@ DEFAULT_MAX_CONFIRM_ATTEMPTS = 8
 
 # Font for use with the information window
 IMG_FONT = cv2.FONT_HERSHEY_SIMPLEX
-IMG_SNAPSHOT_PATH = '/media/usafa/data/pex03_mission/cam_pex'
+IMG_SNAPSHOT_PATH = '/home/usafa/Downloads/CS472/PEX03_Autonomous_First_Aid_Deliver_Kit/cam_pex'
 MISSION_VIRTUAL_MODE = True
 
 
@@ -215,11 +214,12 @@ class DroneMission:
 
     def adjust_to_target_center(self, target_point, frame_write=None):
 
-        # TODO: Calculate how far from center the target point (i.e. our person) is.
         dx = float(target_point[0]) - obj_track.FRAME_HORIZONTAL_CENTER
         dy = obj_track.FRAME_VERTICAL_CENTER - float(target_point[1])
+        
 
-        pixel_forgiveness = 1  # TODO: you decide what "good enough" is to consider centered on x or y axis...
+        pixel_forgiveness = max(5, int(min(obj_track.FRAME_HORIZONTAL_CENTER,
+                                           obj_track.FRAME_VERTICAL_CENTER) * 0.03))
 
         if self.mission_mode == MISSION_MODE_TARGET:
 
@@ -258,8 +258,7 @@ class DroneMission:
                                     (10, 400), IMG_FONT, 1,
                                     (0, 0, 255), 2, cv2.LINE_AA)
                 else:
-                    # TODO: see below for setting your threshold... you decide what it should be
-                    pixel_distance_threshold = -1
+                    pixel_distance_threshold = max(15, pixel_forgiveness * 2)
 
                     # log movements...
                     logging.info("Targeting... determined changes in velocities: X: "
@@ -271,18 +270,13 @@ class DroneMission:
                                     (10, 400), IMG_FONT, 1, (255, 0, 0), 2, cv2.LINE_AA)
 
                     if abs(dx) > pixel_distance_threshold:
-                        # TODO: calculate a velocity for x-axis adjustment
-                        # xv = ???
-                        pass  # TODO: remove "pass" when you've completed this condition.
+                        xv = min(1.5, max(0.2, abs(dx) / obj_track.FRAME_HORIZONTAL_CENTER))
                     else:
-                        # xv = ???
-                        pass  # TODO: remove "pass" when you've completed this condition.
+                        xv = 0.0
                     if abs(dy) > pixel_distance_threshold:
-                        # yv =???
-                        pass  # TODO: remove "pass" when you've completed this condition.
+                        yv = min(1.5, max(0.2, abs(dy) / obj_track.FRAME_VERTICAL_CENTER))
                     else:
-                        # yv = ???
-                        pass  # TODO: remove "pass" when you've completed this condition.
+                        yv = 0.2
 
                     # Execute movements towards centering on target
                     if self.direction_y != "C":  # If we are not centered on y-axis...
@@ -291,17 +285,14 @@ class DroneMission:
                             if frame_write is not None:
                                 cv2.putText(frame_write, "Move forward....", (10, 200), IMG_FONT, 1,
                                             (0, 255, 0), 2, cv2.LINE_AA)
-                                # TODO: you can perform "drone_lib.small_move_forward here,
-                                #       or you can do a drone_lib.move_local as well.
-                                pass  # TODO: remove "pass" when you've completed this condition.
+                                drone_lib.small_move_forward(self.drone, velocity=yv)
+                                
                         else:
                             if frame_write is not None:
                                 cv2.putText(frame_write, "Move back....", (10, 200), IMG_FONT, 1,
                                             (0, 255, 0), 2, cv2.LINE_AA)
-
-                            # TODO: you can perform "drone_lib.small_move_back here,
-                            #       or you can do a drone_lib.move_local as well.
-                            pass  # TODO: remove "pass" when you've completed this condition.
+                                drone_lib.small_move_back(self.drone, velocity=yv)
+                            
 
                     if self.direction_x != "C":  # If we are not centered on x-axis...
 
@@ -310,18 +301,14 @@ class DroneMission:
                             if frame_write is not None:
                                 cv2.putText(frame_write, "Move right....", (10, 300), IMG_FONT, 1,
                                             (0, 255, 0), 2, cv2.LINE_AA)
-
-                            # TODO: you can perform "drone_lib.small_move_right here,
-                            #       or you can do a drone_lib.move_local as well.
-                            pass  # TODO: remove "pass" when you've completed this condition.
+                                drone_lib.small_move_right(self.drone, velocity=xv)
+                            
                         else:
                             if frame_write is not None:
                                 cv2.putText(frame_write, "Move left....", (10, 300), IMG_FONT, 1,
                                             (0, 255, 0), 2, cv2.LINE_AA)
-
-                            # TODO: you can perform "drone_lib.small_move_left here,
-                            #       or you can do a drone_lib.move_local as well.
-                            pass  # TODO: remove "pass" when you've completed this condition.
+                                drone_lib.small_move_left(self.drone, velocity=xv)
+                            
 
             else:
                 if frame_write is not None:
@@ -352,20 +339,19 @@ class DroneMission:
                           f"using alt {alt} and distance from air {dist_to_object}...")
 
             # now get ground distance to object...
-            ground_dist = 0
-            # TODO: use pex03_utils.get_ground_distance to get ground distance
+            ground_dist = pex03_utils.get_ground_distance(alt, dist_to_object)
             self.log_info(f"Ground distance: {ground_dist}.")
 
-            # TODO: now, calculate new lat/long within 10 feet of objective
-            new_lat = new_lon = 0.0
+            delivery_offset_m = 3.048  # 10 feet
+            delivery_dist = max(0.0, ground_dist - delivery_offset_m)
+            new_lat, new_lon = pex03_utils.calc_new_location(lat, lon, heading, delivery_dist)
             # Hint: use new_lat, new_lon = pex03_utils.calc_new_location function to get it...
             #       Don't forget that you want to deliver within ten fee of the person (not much closer),
             #       and you don't want to deliver too far away from that distance...
             self.log_info(f"Current pos: {lat}, {lon}, {heading}.")
             self.log_info(f"New location: {new_lat,}, {new_lon}.")
 
-            # TODO: Now, goto new location...
-            # HINT: drone_lib.goto_point(self.drone,.....)
+            drone_lib.goto_point(self.drone, new_lat, new_lon, alt, alt)
 
             if frame_write is not None:
                 cv2.putText(frame_write, "Delivering...", (10, 400), IMG_FONT, 1, (255, 0, 0), 2, cv2.LINE_AA)
@@ -379,10 +365,7 @@ class DroneMission:
                 # if in "virtual" mode, we will just land in spot where we want to drop package.
                 drone_lib.device_land(self.drone)
             else:
-                # TODO: ***** Finally, lower the package to the ground *****
-
-                alt_thresh = -1  # TODO: YOU set here... when above a certain alt, what rate do you want to descend?
-                # TODO: figure out your speeds here
+                alt_thresh = 6.0
                 self.log_info("Lowering package....")
                 while self.drone.location.global_relative_frame.alt > alt_thresh:
                     if self.drone.mode == "RTL" \
@@ -391,11 +374,8 @@ class DroneMission:
                         logging.info("RTL/LAND mode activated.  Mission ended.")
                         break
 
-                    # TODO: you can perform "drone_lib.small_move_down here,
-                    #       or you can do a drone_lib.move_local as well.
-                    pass  # TODO: remove "pass" when you've completed this condition.
+                    drone_lib.small_move_down(self.drone, velocity=1.5, duration=1, log=self.log)
 
-                # TODO: after reach an alt below your threshold, how quickly should you continue to lower the package?
                 while self.drone.location.global_relative_frame.alt > 3.20:
                     if self.drone.mode == "RTL" \
                             or self.drone.mode == "LAND" \
@@ -403,13 +383,9 @@ class DroneMission:
                         logging.info("RTL/LAND mode activated.  Mission ended.")
                         break
 
-                    # TODO: you can perform "drone_lib.small_move_down here,
-                    #       or you can do a drone_lib.move_local as well.
-                    pass  # TODO: remove "pass" when you've completed this condition.
+                    drone_lib.small_move_down(self.drone, velocity=0.5, duration=1, log=self.log)
 
-            # TODO: Now, release the package.
-            # TODO: see pex03_utils.release_grip function to
-            #  figure out how to open the latch to release the package
+            pex03_utils.release_grip(self.drone, seconds=2)
             self.log_info("Releasing package now....")
             time.sleep(2)
         else:
@@ -419,7 +395,7 @@ class DroneMission:
         drone_lib.log_activity("Time to return home.")
         self.mission_mode = MISSION_MODE_RTL
 
-        # TODO: return the drone home, your job is done...
+        drone_lib.return_to_launch(self.drone, log=self.log)
         cv2.putText(frame_write, "Returning home...", (10, 500), IMG_FONT, 1, (255, 0, 0), 2, cv2.LINE_AA)
 
     def determine_action(self, target_point, frame_write=None):
@@ -505,15 +481,15 @@ class DroneMission:
             timer = cv2.getTickCount()
 
             # Grab current frame from camera
-            # TODO: use obj_track to get current frame
-            frame = None
+            frame = obj_track.get_cur_frame()
 
             # Take a snapshot of drone's current location
             # that corresponds with the frame
             location = self.drone.location.global_relative_frame
 
-            # TODO: keep track of self.last_lon_pos, self.last_lat_pos = location.lat,
-            #  HINT: self.last_alt_pos = location.alt, etc...
+            self.last_lon_pos = location.lon
+            self.last_lat_pos = location.lat
+            self.last_alt_pos = location.alt
             self.last_heading_pos = self.drone.heading
 
             # Prep information frame (the frame we will draw on)
@@ -527,9 +503,7 @@ class DroneMission:
                     = obj_track.check_for_initial_target(frame, frm_display,
                                                          self.virtual_mode, self.virtual_mode)
 
-                # TODO: set your confidence level here...
-                # HINT: needs to be smaller than 99%!
-                conf_level = .99
+                conf_level = .2
                 if confidence is not None \
                         and confidence > conf_level:
                     # We found something.  Now, send to tracker.
@@ -537,8 +511,7 @@ class DroneMission:
                     # bbox needs: xb,yb,wb,hb
                     self.object_identified = True
 
-                    # TODO: start tracking your object!
-                    #HINT: obj_track.set_object_to_track
+                    obj_track.set_object_to_track(frame, bbox)
 
                     # Now, hold onto location where we first began
                     # tracking the object...
@@ -550,9 +523,9 @@ class DroneMission:
                     # Record image of what was "confirmed" here.
                     pex03_utils.write_frame(self.refresh_counter, frm_display, self.log_path)
             else:
-
-                # TODO: Continue to track our objective.
-                #HINT: center, confidence, corner, radius, frm_display, bbox = obj_track.track_with_confirm
+                center, confidence, corner, radius, frm_display, bbox \
+                    = obj_track.track_with_confirm(frame, frm_display,
+                                                   self.virtual_mode, self.virtual_mode)
 
                 if not confidence:
                     cv2.putText(frm_display,
