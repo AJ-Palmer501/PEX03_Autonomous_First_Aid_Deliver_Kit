@@ -1,4 +1,12 @@
 import math
+import collections
+import collections.abc
+
+# DroneKit still references collections.MutableMapping, which was moved to
+# collections.abc in newer Python versions such as 3.12.
+if not hasattr(collections, "MutableMapping"):
+    collections.MutableMapping = collections.abc.MutableMapping
+
 from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
 from pymavlink import mavutil
 import time

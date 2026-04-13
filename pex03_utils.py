@@ -10,9 +10,8 @@ import cv2
 GRIPPER_OPEN = 1087
 GRIPPER_CLOSED = 1940
 
-# TODO: be sure to set this path to your team's name (instead of "cam")
-#   - set to something that works on your text machine.
-DEFAULT_LOG_PATH = '/media/usafa/data/pex02_mission/cam'
+
+DEFAULT_LOG_PATH = '/home/usafa/Downloads/CS472/Primis'
 
 
 def write_log_entry(entry):

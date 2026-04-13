@@ -24,7 +24,7 @@
         "  [ ] virtual_mode        = false",
         "  [ ] connect_string      = correct port for your hardware",
         "  [ ] mission_log_path    = your team's folder",
-        "  [ ] weights_path        = path to your .engine file",
+        "  [ ] weights_path        = 'auto' or a specific model path",
         "  [ ] use_estimated_distance confirmed for your hardware setup",
         "═══════════════════════════════════════════════════════════════════════"
     ],
@@ -62,8 +62,10 @@
     "takeoff_altitude_m": 15.0,
 
     "_comment_paths": [
-        "weights_path : Absolute path to the YOLOv8 TensorRT engine file",
-        "    (or a .pt weights file for non-TensorRT inference).",
+        "weights_path : Path to the YOLOv8 model file to load, or 'auto'.",
+        "    Recommended: leave this as 'auto'.",
+        "    Then x86_64 / normal computers prefer the portable .pt file,",
+        "    while Jetson/ARM64 systems prefer the TensorRT .engine file.",
         "    This is the detection model used by both check_for_initial_target()",
         "    and track_with_confirm() in object_tracking_y8_histo.py.",
         "    Update this path to match where your team has placed the model.",
@@ -78,8 +80,8 @@
         "    each other on shared hardware.",
         "    Example: '/media/usafa/data/pex03_mission/team_alpha'"
     ],
-    "weights_path": "yolo/yolov8m-visdrone.engine",
-    "mission_log_path": "/media/data/pex03_mission/cam",
+    "weights_path": "auto",
+    "mission_log_path": "/home/usafa/Downloads/CS472/Primis",
 
     "_comment_camera_hardware": [
         "These fields describe the physical RealSense camera installed on",

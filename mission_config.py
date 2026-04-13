@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import platform
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -88,7 +89,7 @@ class MissionConfig:
     takeoff_altitude_m: float = 15.0
 
     # ── Paths ─────────────────────────────────────────────────────────────────
-    weights_path: str     = "/home/usafa/usafa_472/sentinel_drone/yolo/yolov8s_visdrone.engine"
+    weights_path: str     = "auto"
     mission_log_path: str = "/media/usafa/data/pex03_mission/cam"
 
     # ── Camera hardware ───────────────────────────────────────────────────────
@@ -137,6 +138,10 @@ class MissionConfig:
 
     # ── Derived property ──────────────────────────────────────────────────────
 
+    def __post_init__(self) -> None:
+        """Resolve the model path after defaults / JSON values are applied."""
+        self.weights_path = self._resolve_weights_path(self.weights_path)
+
     @property
     def effective_camera_tilt_deg(self) -> float:
         """
@@ -157,6 +162,35 @@ class MissionConfig:
     def tilt_source(self) -> str:
         """Human-readable label for which tilt source is active ('imu' or 'config')."""
         return "imu" if self.camera_tilt_measured_deg is not None else "config"
+
+    @staticmethod
+    def _resolve_weights_path(configured_path: str) -> str:
+        """
+        Resolve the model path for the current machine.
+
+        `auto` preserves both deployment modes:
+        * x86_64 / normal PCs prefer the portable `.pt` weights
+        * arm64 / aarch64 Jetson systems prefer the TensorRT `.engine`
+        """
+        if configured_path and configured_path.lower() != "auto":
+            return configured_path
+
+        arch = platform.machine().lower()
+        is_arm64 = arch in {"aarch64", "arm64"}
+        candidates = (
+            ["yolo/yolov8m-visdrone.engine", "yolo/yolov8m-visdrone.pt"]
+            if is_arm64
+            else ["yolo/yolov8m-visdrone.pt", "yolo/yolov8m-visdrone.engine"]
+        )
+
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                LOG.info("Auto-selected YOLO weights for %s: %s", arch, candidate)
+                return candidate
+
+        # Fall back to the architecture-preferred path even if the file is not
+        # present yet so the later error message still points at the right file.
+        return candidates[0]
 
     # ── Loader ────────────────────────────────────────────────────────────────
 
@@ -229,6 +263,11 @@ class MissionConfig:
                     )
             else:
                 unknown_keys.append(key)
+
+        # Resolve any architecture-dependent model selection after JSON
+        # settings have been overlaid, so "auto" from the config file turns
+        # into a real path before callers try to load the model.
+        cfg.weights_path = cls._resolve_weights_path(cfg.weights_path)
 
         if unknown_keys:
             LOG.warning(
