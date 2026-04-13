@@ -1,0 +1,24 @@
+
+First pass install:
+  pip3 install ultralytics
+
+pip3 uninstall torch torchvision torchaudio ultralytics -y
+
+sudo apt-get update
+sudo apt-get install -y libjpeg-dev zlib1g-dev libpython3-dev libavcodec-dev libavformat-dev libswscale-dev
+
+Install Pytorch (nvidia wheel):
+  pip3 install https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
+
+Steps to Install Torchvision from Source (may take 45 minutes or more):
+  git clone --branch v0.16.0 https://github.com/pytorch/vision torchvision
+  cd torchvision
+  export BUILD_VERSION=0.16.0
+  python3 setup.py install --user
+
+Verify install:
+  python3 -c "import torchvision; print(torchvision.__version__)"
+
+
+install ultralytics:
+  pip3 install --force-reinstall --no-deps ultralytics
