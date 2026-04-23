@@ -58,7 +58,7 @@
     ],
     "connect_string": "127.0.0.1:14550",
     "baud": 115200,
-    "virtual_mode": true,
+    "virtual_mode": false,
     "takeoff_altitude_m": 15.0,
 
     "_comment_paths": [
@@ -267,11 +267,11 @@
         "    Lower (→ 0.55) if the target is frequently lost due to",
         "    changing lighting or the person rotating away from the camera."
     ],
-    "detect_confidence": 0.25,
+    "detect_confidence": 0.45,
     "detect_every_n": 1,
     "model_imgsz": 640,
-    "tracker_misses_max": 20,
-    "histo_match_threshold": 0.70,
+    "tracker_misses_max": 30,
+    "histo_match_threshold": 0.72,
 
     "_comment_mission": [
         "These parameters tune the mission state machine in pex03.py.",

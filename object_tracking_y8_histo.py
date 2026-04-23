@@ -118,6 +118,8 @@ Tunable module-level constants
 from __future__ import annotations
 
 import logging
+import platform
+from pathlib import Path
 from typing import Optional, Tuple
 
 import cv2
@@ -302,6 +304,54 @@ def _histogram_correlation(sig_a: np.ndarray, sig_b: np.ndarray) -> float:
 
 # ── Model loading ──────────────────────────────────────────────────────────────
 
+def _resolve_model_path(engine_path: str) -> Path:
+    """
+    Resolve the requested model path and pick a sensible local fallback.
+
+    `auto` mirrors the main mission config behavior:
+    * x86_64 development machines prefer the portable `.pt` file
+    * arm64 / aarch64 Jetson systems prefer the TensorRT `.engine`
+
+    If an explicit `.engine` path is requested on a non-ARM machine and a
+    sibling `.pt` file exists, prefer the `.pt` weights to avoid TensorRT
+    serialization-version mismatches across machines.
+    """
+    base_dir = Path(__file__).resolve().parent
+    arch = platform.machine().lower()
+    is_arm64 = arch in {"aarch64", "arm64"}
+
+    if engine_path.lower() == "auto":
+        candidates = (
+            [base_dir / "yolo" / "yolov8m-visdrone.engine",
+             base_dir / "yolo" / "yolov8m-visdrone.pt"]
+            if is_arm64 else
+            [base_dir / "yolo" / "yolov8m-visdrone.pt",
+             base_dir / "yolo" / "yolov8m-visdrone.engine"]
+        )
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
+
+    requested_path = Path(engine_path).expanduser()
+    if not requested_path.is_absolute():
+        requested_path = base_dir / requested_path
+
+    resolved_path = requested_path.resolve(strict=False)
+
+    if resolved_path.suffix == ".engine" and not is_arm64:
+        pt_fallback = resolved_path.with_suffix(".pt")
+        if pt_fallback.exists():
+            LOG.warning(
+                "Requested TensorRT engine on %s, falling back to portable "
+                "PyTorch weights instead: %s",
+                arch,
+                pt_fallback,
+            )
+            return pt_fallback
+
+    return resolved_path
+
 def load_model(engine_path: str = "yolov8s_visdrone.engine",
                imgsz: int = 640,
                conf: float = 0.25,
@@ -316,7 +366,8 @@ def load_model(engine_path: str = "yolov8s_visdrone.engine",
 
     Parameters
     ----------
-    engine_path : Path to the TensorRT .engine file or a .pt weights file.
+    engine_path : Path to the TensorRT .engine file, a .pt weights file,
+                  or 'auto' to choose based on the current machine.
     imgsz       : Inference resolution.  Must match the export resolution
                   if using a static TRT engine.
     conf        : Minimum YOLO detection confidence.
@@ -333,14 +384,21 @@ def load_model(engine_path: str = "yolov8s_visdrone.engine",
             list(ignored.keys()),
         )
 
-    _model = YOLO(engine_path, task='detect')
+    resolved_path = _resolve_model_path(engine_path)
+    if not resolved_path.exists():
+        raise FileNotFoundError(
+            f"YOLO model file not found: '{resolved_path}'. "
+            "Pass a valid path or place the model under the repo's 'yolo/' directory."
+        )
+
+    _model = YOLO(str(resolved_path), task='detect')
     _model_imgsz = imgsz
     _model_conf = conf
 
     LOG.info(
         "Histogram tracker: loaded model %s  imgsz=%d  conf=%.2f  "
         "match_threshold=%.2f  update_alpha=%.2f",
-        engine_path, imgsz, conf,
+        resolved_path, imgsz, conf,
         HISTO_MATCH_THRESHOLD, HISTO_UPDATE_ALPHA,
     )
 
@@ -519,6 +577,7 @@ def track_with_confirm(
         img: np.ndarray,
         img_write: Optional[np.ndarray] = None,
         show_img: bool = False,
+        in_debug: bool = False,
         **kwargs,
 ) -> Tuple:
     """
@@ -562,9 +621,14 @@ def track_with_confirm(
         return (0, 0), None, (0, 0), None, img_write, (0, 0, 0, 0)
 
     # ── Run YOLO detection (no ByteTrack) ──────────────────────────────────
+    target_classes = [4] if in_debug else _PERSON_CLASSES
+    match_threshold = 0.68 if in_debug else HISTO_MATCH_THRESHOLD
+    update_alpha = 0.12 if in_debug else HISTO_UPDATE_ALPHA
+    update_min_score = 0.72 if in_debug else HISTO_UPDATE_MIN_SCORE
+
     results = _model(
         img,
-        classes=_PERSON_CLASSES,
+        classes=target_classes,
         conf=_model_conf,
         imgsz=_model_imgsz,
         half=True,
@@ -603,7 +667,7 @@ def track_with_confirm(
             best_bbox = candidate_bbox
 
     # ── No match above threshold ───────────────────────────────────────────
-    if best_bbox is None or best_score < HISTO_MATCH_THRESHOLD:
+    if best_bbox is None or best_score < match_threshold:
         return _handle_miss(img_write, show_img)
 
     # ── Match found ────────────────────────────────────────────────────────
@@ -618,14 +682,14 @@ def track_with_confirm(
 
     # Adaptive signature update: only blend when the match is very confident.
     # This prevents marginal matches from drifting the signature over time.
-    if best_score >= HISTO_UPDATE_MIN_SCORE:
+    if best_score >= update_min_score:
         fresh_crop = _safe_crop(img, best_bbox)
         if fresh_crop is not None:
             fresh_sig = _compute_histogram(fresh_crop)
             if fresh_sig is not None:
                 _target_signature = (
-                    (1.0 - HISTO_UPDATE_ALPHA) * _target_signature
-                    + HISTO_UPDATE_ALPHA * fresh_sig
+                    (1.0 - update_alpha) * _target_signature
+                    + update_alpha * fresh_sig
                 ).astype(np.float32)
 
     # Draw annotation.
@@ -921,7 +985,7 @@ if __name__ == '__main__':
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
 
-    engine = '/home/usafa/usafa_472/sentinel_drone/yolo/yolov8m-visdrone.engine'
+    engine = 'auto'
     if len(sys.argv) > 1:
         engine = sys.argv[1]
 

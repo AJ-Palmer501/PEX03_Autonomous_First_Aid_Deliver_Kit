@@ -24,6 +24,7 @@ Dependencies
 """
 
 import logging
+import os
 import time
 import cv2
 import random
@@ -106,6 +107,7 @@ class DroneMission:
         # Pull frequently-used values out of config so the code below reads
         # cleanly without long chains of self.config.xxx everywhere.
         self.virtual_mode           = config.virtual_mode
+        self.show_windows           = self.virtual_mode or self._can_show_windows()
         self.update_rate            = config.update_rate
         self.target_radius          = config.target_acceptance_radius_px
         self.image_log_rate         = config.image_log_rate
@@ -137,6 +139,11 @@ class DroneMission:
         self.last_lon_pos     = -1.0
         self.last_alt_pos     = -1.0
         self.last_heading_pos = -1.0
+
+    @staticmethod
+    def _can_show_windows() -> bool:
+        """Return True when this process appears to have a desktop display."""
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
     # =========================================================================
     # UTILITY METHODS
@@ -273,18 +280,18 @@ class DroneMission:
                     cv2.putText(frame_write, "Moving forward...",
                                 (10, 200), IMG_FONT, 1, (0, 255, 0), 2, cv2.LINE_AA)
                 if abs(dy) > pixel_distance_threshold:
-                    yv = 0.50
+                    yv = 0.80
                 else:
-                    yv = 0.20
+                    yv = 0.35
                 drone_lib.small_move_forward(self.drone, velocity=yv)
             else:
                 if frame_write is not None:
                     cv2.putText(frame_write, "Moving backward...",
                                 (10, 200), IMG_FONT, 1, (0, 255, 0), 2, cv2.LINE_AA)
                 if abs(dy) > pixel_distance_threshold:
-                    yv = 0.50
+                    yv = 0.80
                 else:
-                    yv = 0.20
+                    yv = 0.35
                 drone_lib.small_move_back(self.drone, velocity=yv)
 
         # ── X-axis (left / right) ─────────────────────────────────────────────
@@ -294,18 +301,18 @@ class DroneMission:
                     cv2.putText(frame_write, "Moving right...",
                                 (10, 300), IMG_FONT, 1, (0, 255, 0), 2, cv2.LINE_AA)
                 if abs(dx) > pixel_distance_threshold:
-                    xv = 0.50
+                    xv = 0.80
                 else:
-                    xv = 0.20
+                    xv = 0.35
                 drone_lib.small_move_right(self.drone, velocity=xv)
             else:
                 if frame_write is not None:
                     cv2.putText(frame_write, "Moving left...",
                                 (10, 300), IMG_FONT, 1, (0, 255, 0), 2, cv2.LINE_AA)
                 if abs(dx) > pixel_distance_threshold:
-                    xv = 0.50
+                    xv = 0.80
                 else:
-                    xv = 0.20
+                    xv = 0.35
                 drone_lib.small_move_left(self.drone, velocity=xv)
 
         return False   # still adjusting
@@ -314,7 +321,8 @@ class DroneMission:
         """
         Calculate the drop point, fly there, lower the package, and release it.
 
-        When this method returns, conduct_mission() transitions to RTL.
+        Returns True when the delivery sequence completed and False when it
+        had to abort early (invalid geometry, failed navigation, etc.).
 
         Distance to the target is determined by one of two methods depending
         on config.use_estimated_distance:
@@ -369,7 +377,7 @@ class DroneMission:
 
             if slant_dist <= 0:
                 self.log_info("Deliver: invalid rangefinder reading — aborting delivery.")
-                return
+                return False
 
             # Convert slant distance + altitude to horizontal ground distance.
             # Pythagoras:  ground² = slant² − altitude²
@@ -379,7 +387,7 @@ class DroneMission:
         # Guard: if the distance estimate is invalid, abort.
         if ground_dist <= 0:
             self.log_info("Deliver: ground distance is invalid — aborting delivery.")
-            return
+            return False
 
         # ── Step 2: Calculate the GPS coordinates of the drop point ──────────
         # We know: current lat/lon, the drone's heading (bearing), and the
@@ -402,7 +410,7 @@ class DroneMission:
         arrived = drone_lib.goto_point(self.drone, new_lat, new_lon, 2.0, alt)
         if not arrived:
             self.log_info("Deliver: failed to reach drop point before timeout.")
-            return
+            return False
 
         if frame_write is not None:
             cv2.putText(frame_write, "Delivering...",
@@ -411,9 +419,26 @@ class DroneMission:
 
         # ── Step 4: Lower the package ─────────────────────────────────────────
         if self.virtual_mode:
-            # In the simulator we land in place to demonstrate the delivery step.
-            self.log_info("Deliver (virtual): landing in place to simulate delivery.")
-            drone_lib.device_land(self.drone)
+            # In the simulator, descend to a realistic drop height but do not
+            # touch down, so the aircraft can release the package and then RTL.
+            alt_thresh = 6.0
+            drop_release_alt = 3.2
+
+            self.log_info("Deliver (virtual): lowering to simulated drop height...")
+            while self.drone.location.global_relative_frame.alt > alt_thresh:
+                if (self.drone.mode == "RTL" or self.drone.mode == "LAND"
+                        or self.mission_mode == MISSION_MODE_RTL):
+                    self.log_info("Deliver (virtual): abort signal — stopping descent.")
+                    break
+                drone_lib.small_move_down(self.drone, velocity=0.50)
+
+            self.log_info("Deliver (virtual): switching to fine descent...")
+            while self.drone.location.global_relative_frame.alt > drop_release_alt:
+                if (self.drone.mode == "RTL" or self.drone.mode == "LAND"
+                        or self.mission_mode == MISSION_MODE_RTL):
+                    self.log_info("Deliver (virtual): abort signal — stopping fine descent.")
+                    break
+                drone_lib.small_move_down(self.drone, velocity=0.20)
 
         else:
             # Two-phase descent: fast until near the ground, then slow/fine
@@ -446,6 +471,8 @@ class DroneMission:
         if frame_write is not None:
             cv2.putText(frame_write, "Returning home...",
                         (10, 500), IMG_FONT, 1, (255, 0, 0), 2, cv2.LINE_AA)
+
+        return True
 
     # =========================================================================
     # MAIN MISSION LOOP — THE STATE MACHINE
@@ -548,7 +575,8 @@ class DroneMission:
                     center, confidence, corner, radius, frm_display, bbox \
                         = obj_track.check_for_initial_target(
                             frame, frm_display,
-                            show_img=self.virtual_mode)
+                            show_img=self.show_windows,
+                            in_debug=self.virtual_mode)
 
                     conf_level = self.config.detect_confidence
 
@@ -561,10 +589,10 @@ class DroneMission:
                             f"lat={location.lat:.6f}, lon={location.lon:.6f}, "
                             f"alt={location.alt:.1f} m.")
 
-                        # Lock the histogram tracker so we can re-identify
-                        # the same person after maneuvering back.
-                        obj_track.set_object_to_track(frame, bbox)
-                        self.object_identified = obj_track._target_track_id is not None
+                        # Per Figure 5.2 / Section 5.2, SEEK only records the
+                        # candidate sighting.  Tracker lock happens later in
+                        # CONFIRM on a fresh frame at the sighting location.
+                        self.object_identified = False
 
                         # Record where the candidate was first seen.
                         self.init_obj_lat     = location.lat
@@ -591,7 +619,7 @@ class DroneMission:
                                              2.5,
                                              self.init_obj_alt)
                         drone_lib.condition_yaw(self.drone, self.last_heading_pos)
-                        time.sleep(4)   # stabilise before imaging
+                        time.sleep(0.5 if self.virtual_mode else 4.0)
 
             # -----------------------------------------------------------------
             # STATE: CONFIRM
@@ -611,26 +639,28 @@ class DroneMission:
                     f"/ {self.max_confirm_attempts}")
 
                 center, confidence, corner, radius, frm_display, bbox = \
-                    obj_track.track_with_confirm(frame, frm_display,
-                                                 show_img=self.virtual_mode)
-                self.object_identified = confidence is not None
+                    obj_track.check_for_initial_target(
+                        frame, frm_display,
+                        show_img=self.show_windows,
+                        in_debug=self.virtual_mode)
+                self.object_identified = confidence is not None \
+                    and confidence >= self.config.detect_confidence
 
                 if self.object_identified:
-                    self.confirm_streak += 1
-                    cv2.putText(frm_display,
-                                f"Confirm lock {self.confirm_streak}/2",
-                                (10, 250), IMG_FONT, 1, (0, 255, 0), 2, cv2.LINE_AA)
-
-                    if self.confirm_streak < 2:
-                        self.log_info("[CONFIRM] First re-acquisition frame seen; "
-                                      "holding for one more stable match.")
-                        time.sleep(0.25)
-                        continue
-
-                    # ── TRANSITION: CONFIRM → TARGET ──────────────────────────
-                    self.log_info("[CONFIRM → TARGET] Target CONFIRMED. "
-                                  "Beginning centring manoeuvre.")
-                    self.mission_mode = MISSION_MODE_TARGET
+                    # Figure 5.2: confirm on a fresh YOLO frame, then lock the
+                    # histogram tracker on the confirmed bbox.
+                    obj_track.set_object_to_track(frame, bbox)
+                    if obj_track._target_track_id is None:
+                        self.log_info("[CONFIRM] Confirmation bbox could not be "
+                                      "registered for tracking; retrying.")
+                        self.object_identified = False
+                    else:
+                        cv2.putText(frm_display, "Confirmed target",
+                                    (10, 250), IMG_FONT, 1, (0, 255, 0), 2, cv2.LINE_AA)
+                        # ── TRANSITION: CONFIRM → TARGET ──────────────────────
+                        self.log_info("[CONFIRM → TARGET] Target CONFIRMED on "
+                                      "fresh frame. Beginning centring manoeuvre.")
+                        self.mission_mode = MISSION_MODE_TARGET
 
                 elif self.confirm_attempts >= self.max_confirm_attempts:
 
@@ -640,11 +670,11 @@ class DroneMission:
                         "exhausted.  Target NOT confirmed — resuming AUTO.")
                     self.object_identified = False
                     self.confirm_streak = 0
+                    obj_track._target_track_id = None
                     self.mission_mode = MISSION_MODE_SEEK
                     drone_lib.change_device_mode(device=self.drone, mode="AUTO")
 
                 else:
-                    self.confirm_streak = 0
                     self.log_info("[CONFIRM] No stable match yet; holding over sighting.")
                     cv2.putText(frm_display, "Holding over candidate...",
                                 (10, 250), IMG_FONT, 1, (255, 0, 0), 2, cv2.LINE_AA)
@@ -672,7 +702,8 @@ class DroneMission:
 
                 center, confidence, corner, radius, frm_display, bbox = \
                     obj_track.track_with_confirm(frame, frm_display,
-                                                 show_img=self.virtual_mode)
+                                                 show_img=self.show_windows,
+                                                 in_debug=self.virtual_mode)
 
                 if confidence is None and obj_track._target_track_id is None:
 
@@ -683,6 +714,7 @@ class DroneMission:
                                 (10, 400), IMG_FONT, 1, (0, 255, 255), 2, cv2.LINE_AA)
                     self.object_identified = False
                     self.confirm_streak = 0
+                    obj_track._target_track_id = None
                     self.mission_mode = MISSION_MODE_SEEK
 
                 elif confidence is None:
@@ -717,14 +749,17 @@ class DroneMission:
                 self.log_info("[DELIVER] Delivery in progress...")
                 # Pass target_center so the geometry estimator can use the
                 # target's pixel row when use_estimated_distance = true.
-                self.deliver_package(center, frm_display)
+                delivered = self.deliver_package(center, frm_display)
 
-                # ── TRANSITION: DELIVER → RTL ──────────────────────────────────
-                self.log_info("[DELIVER → RTL] Delivery complete. "
-                              "Commanding return-to-launch.")
-                self.mission_mode = MISSION_MODE_RTL
-
-                drone_lib.return_to_launch(self.drone)
+                if delivered:
+                    # ── TRANSITION: DELIVER → RTL ──────────────────────────────
+                    self.log_info("[DELIVER → RTL] Delivery complete. "
+                                  "Commanding return-to-launch.")
+                    self.mission_mode = MISSION_MODE_RTL
+                    drone_lib.return_to_launch(self.drone)
+                else:
+                    self.log_info("[DELIVER] Delivery did not complete; "
+                                  "remaining in DELIVER for the next loop.")
 
             # -----------------------------------------------------------------
             # STATE: RTL
@@ -755,7 +790,7 @@ class DroneMission:
                         f"State: {state_labels.get(self.mission_mode, '?')}",
                         (100, 25), IMG_FONT, 0.6, (200, 200, 0), 2)
 
-            if self.virtual_mode:
+            if self.show_windows:
                 cv2.imshow("Real-time Detect", frm_display)
                 cv2.imshow("Raw", frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -839,14 +874,15 @@ if __name__ == '__main__':
         measured_tilt = imu_reader.measure_tilt(
             duration_s=config.camera_tilt_sample_duration_s)
 
-        if measured_tilt is not None:
+        if measured_tilt is not None and 1.0 <= measured_tilt <= 89.0:
             config.camera_tilt_measured_deg = measured_tilt
             log.info("Camera tilt measured: %.2f° (will use this for distance "
                      "estimation — config fallback was %.2f°)",
                      measured_tilt, config.camera_tilt_deg)
         else:
-            log.warning("IMU tilt measurement failed.  "
+            log.warning("IMU tilt measurement was invalid (%s).  "
                         "Falling back to config value: %.2f°",
+                        f"{measured_tilt:.2f}°" if measured_tilt is not None else "None",
                         config.camera_tilt_deg)
     else:
         if not enable_imu:
@@ -899,17 +935,19 @@ if __name__ == '__main__':
 
         log.info("Mission complete — disarming and disconnecting.")
         drone.armed = False
-        drone.close()
-
-        # Stop the IMU reader thread cleanly if it was running.
-        if imu_reader is not None:
-            imu_reader.stop()
-
         log.info("End of PEX 03.")
 
     except Exception:
         log.info("Unhandled exception: %s",
                  traceback.format_exception(*sys.exc_info()))
+        raise
+    finally:
         if imu_reader is not None:
             imu_reader.stop()
-        raise
+        obj_track.stop_camera_stream()
+        cv2.destroyAllWindows()
+        if drone is not None:
+            try:
+                drone.close()
+            except Exception:
+                pass

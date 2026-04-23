@@ -101,8 +101,8 @@ def estimate_ground_distance_m(
     """
     import math
 
-    # Sanity guard: we need meaningful altitude to compute distance.
-    if altitude_m < 0.5:
+    # Sanity guards: we need meaningful positive geometry inputs.
+    if altitude_m <= 0.0 or frame_height <= 1 or camera_fov_v_deg <= 0.0:
         return -1.0
 
     v_fov_rad  = math.radians(camera_fov_v_deg)
@@ -113,7 +113,9 @@ def estimate_ground_distance_m(
     # Subtract 0.5 so targets above centre give a negative offset
     # (shallower depression) and targets below give a positive offset
     # (steeper depression, i.e. closer to the ground directly below).
-    row_fraction = float(target_y_px) / max(1, int(frame_height))
+    max_row = max(1.0, float(frame_height - 1))
+    clamped_target_y = min(max(float(target_y_px), 0.0), max_row)
+    row_fraction = clamped_target_y / max_row
     pixel_offset_rad = (row_fraction - 0.5) * v_fov_rad
 
     # Total depression angle below the horizontal plane.
@@ -131,12 +133,24 @@ def estimate_ground_distance_m(
 def get_ground_distance(height, hypotenuse):
     import math
 
-    # Assuming we know the distance to object from the air
-    # (the hypotenuse), we can calculate the ground distance
-    # by using the simple formula of:
-    # d^2 = hypotenuse^2 - height^2
+    height = float(height)
+    hypotenuse = float(hypotenuse)
 
-    return math.sqrt(hypotenuse ** 2 - height ** 2)
+    # Guard against invalid or physically impossible measurements.
+    if height < 0.0 or hypotenuse <= 0.0:
+        return -1.0
+    if hypotenuse < height:
+        return -1.0
+
+    # Right-triangle geometry:
+    #   ground^2 + height^2 = hypotenuse^2
+    # so:
+    #   ground = sqrt(hypotenuse^2 - height^2)
+    radicand = hypotenuse ** 2 - height ** 2
+    if radicand < 0.0:
+        return -1.0
+
+    return math.sqrt(radicand)
 
 
 def calc_new_location(cur_lat, cur_lon, heading, meters):
