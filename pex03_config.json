@@ -58,7 +58,7 @@
     ],
     "connect_string": "127.0.0.1:14550",
     "baud": 115200,
-    "virtual_mode": false,
+    "virtual_mode": true,
     "takeoff_altitude_m": 15.0,
 
     "_comment_paths": [
@@ -299,10 +299,33 @@
         "",
         "image_log_rate : Save an annotated snapshot to mission_log_path",
         "    every N frames.  4 = save every 4th frame.  Increase to reduce",
-        "    disk usage on long flights; decrease for more detailed logs."
+        "    disk usage on long flights; decrease for more detailed logs.",
+        "",
+        "post_delivery_surveillance_enabled : When true, after the package",
+        "    is delivered the drone will fly a short figure-eight around",
+        "    the drop site before returning home.",
+        "",
+        "surveillance_figure8_count : Number of full figure-eight patterns",
+        "    to fly before returning home.",
+        "",
+        "surveillance_figure8_radius_m : Radius of each lobe of the",
+        "    post-delivery figure-eight in metres.  Larger values cover",
+        "    more area but require more room.",
+        "",
+        "surveillance_altitude_m : Relative altitude to climb or hold for",
+        "    the surveillance pattern.  This should be safely above the",
+        "    dropped package and nearby people before lateral motion starts.",
+        "",
+        "surveillance_airspeed_mps : Airspeed used while flying the",
+        "    figure-eight waypoints."
     ],
     "max_confirm_attempts": 8,
     "target_acceptance_radius_px": 10,
     "update_rate": 1,
-    "image_log_rate": 4
+    "image_log_rate": 4,
+    "post_delivery_surveillance_enabled": true,
+    "surveillance_figure8_count": 2,
+    "surveillance_figure8_radius_m": 6.0,
+    "surveillance_altitude_m": 10.0,
+    "surveillance_airspeed_mps": 2.0
 }

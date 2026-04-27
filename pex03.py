@@ -71,10 +71,13 @@ MISSION_MODE_SEEK    = 0   # Flying AUTO waypoints, scanning for a target
 MISSION_MODE_CONFIRM = 1   # Candidate spotted; repositioning to confirm
 MISSION_MODE_TARGET  = 2   # Confirmed; maneuvering to centre over target
 MISSION_MODE_DELIVER = 4   # centered; calculating drop point and delivering
-MISSION_MODE_RTL     = 8   # Delivery done (or aborted); returning home
+MISSION_MODE_SURVEIL = 8   # Delivery done; fly a surveillance figure-eight
+MISSION_MODE_RTL     = 16  # Mission complete (or aborted); returning home
 
 # Font for cv2 text annotations
 IMG_FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+ARM_READY_TIMEOUT_S = 45.0
 
 
 # =============================================================================
@@ -113,6 +116,21 @@ class DroneMission:
         self.image_log_rate         = config.image_log_rate
         self.log_path               = config.mission_log_path
         self.max_confirm_attempts   = config.max_confirm_attempts
+        self.post_delivery_surveillance_enabled = (
+            config.post_delivery_surveillance_enabled
+        )
+        self.surveillance_figure8_count = max(
+            1, int(config.surveillance_figure8_count)
+        )
+        self.surveillance_figure8_radius_m = max(
+            2.0, float(config.surveillance_figure8_radius_m)
+        )
+        self.surveillance_altitude_m = max(
+            4.0, float(config.surveillance_altitude_m)
+        )
+        self.surveillance_airspeed_mps = max(
+            0.5, float(config.surveillance_airspeed_mps)
+        )
 
         # ── State machine ─────────────────────────────────────────────────────
         self.mission_mode       = MISSION_MODE_SEEK
@@ -158,6 +176,102 @@ class DroneMission:
         """Arm the drone (convenience wrapper)."""
         drone_lib.arm_device(self.drone)
 
+    def conduct_post_delivery_surveillance(self, frame_write=None) -> bool:
+        """
+        Fly a short figure-eight around the drop site before RTL.
+
+        The pattern is centred on the current post-delivery position.  The
+        drone first climbs to a safe surveillance altitude, then visits a
+        small set of waypoints that approximate a figure-eight.
+        """
+        if not self.post_delivery_surveillance_enabled:
+            self.log_info("Surveillance disabled — skipping figure-eight.")
+            return True
+
+        location = self.drone.location.global_relative_frame
+        center_lat = location.lat
+        center_lon = location.lon
+        center_alt = max(float(location.alt), self.surveillance_altitude_m)
+        figure8_count = self.surveillance_figure8_count
+        radius = self.surveillance_figure8_radius_m
+        speed = self.surveillance_airspeed_mps
+
+        self.log_info(
+            "[SURVEIL] Starting figure-eight over drop site "
+            f"(count={figure8_count}, radius={radius:.1f} m, "
+            f"alt={center_alt:.1f} m, speed={speed:.1f} m/s)."
+        )
+
+        if self.drone.mode != "GUIDED":
+            drone_lib.change_device_mode(device=self.drone, mode="GUIDED")
+
+        climbed = drone_lib.goto_point(
+            self.drone, center_lat, center_lon, speed, center_alt
+        )
+        if not climbed:
+            self.log_info("[SURVEIL] Could not reach surveillance altitude.")
+            return False
+
+        center_location = drone_lib.LocationGlobalRelative(
+            center_lat, center_lon, center_alt
+        )
+        offsets_m = [
+            (0.0, 0.0),
+            (radius, radius),
+            (0.0, 2.0 * radius),
+            (-radius, radius),
+            (0.0, 0.0),
+            (-radius, -radius),
+            (0.0, -2.0 * radius),
+            (radius, -radius),
+            (0.0, 0.0),
+        ]
+
+        for lap_idx in range(figure8_count):
+            self.log_info(
+                f"[SURVEIL] Starting figure-eight {lap_idx + 1}/{figure8_count}."
+            )
+            for idx, (north_m, east_m) in enumerate(offsets_m, start=1):
+                if (self.drone.mode == "RTL"
+                        or self.drone.mode == "LAND"
+                        or self.mission_mode == MISSION_MODE_RTL):
+                    self.log_info("[SURVEIL] Abort signal received during figure-eight.")
+                    return False
+
+                waypoint = drone_lib.get_location_metres(
+                    center_location, north_m, east_m
+                )
+                self.log_info(
+                    f"[SURVEIL] Figure-eight {lap_idx + 1}/{figure8_count}, "
+                    f"waypoint {idx}/{len(offsets_m)}: "
+                    f"dNorth={north_m:.1f} m  dEast={east_m:.1f} m"
+                )
+                arrived = drone_lib.goto_point(
+                    self.drone,
+                    waypoint.lat,
+                    waypoint.lon,
+                    speed,
+                    center_alt,
+                    timeout_s=90,
+                )
+                if not arrived:
+                    self.log_info(
+                        f"[SURVEIL] Failed to reach waypoint {idx} of "
+                        f"figure-eight {lap_idx + 1}; ending surveillance early."
+                    )
+                    return False
+
+                if frame_write is not None:
+                    cv2.putText(
+                        frame_write,
+                        f"Surveil {lap_idx + 1}/{figure8_count} - {idx}/{len(offsets_m)}",
+                        (10, 450), IMG_FONT, 1, (0, 255, 255), 2, cv2.LINE_AA,
+                    )
+
+        self.log_info(
+            f"[SURVEIL] Completed {figure8_count} figure-eight pattern(s)."
+        )
+        return True
     # =========================================================================
     # GEOMETRY HELPERS
     # These methods answer spatial questions about the target's position
@@ -498,7 +612,8 @@ class DroneMission:
         CONFIRM → SEEK     : max confirm attempts exhausted
         TARGET  → DELIVER  : adjust_to_target_center() returns True (centered)
         TARGET  → SEEK     : tracker loses target entirely
-        DELIVER → RTL      : deliver_package() returns (delivery complete)
+        DELIVER → SURVEIL  : deliver_package() returns (delivery complete)
+        SURVEIL → RTL      : figure-eight surveillance completed
         """
         self.log_info("=" * 60)
         self.log_info("MISSION STARTED")
@@ -742,7 +857,7 @@ class DroneMission:
             # camera geometry (if use_estimated_distance = true) or the
             # rangefinder.  Fly there, lower and release the package.
             #
-            # Exit: → RTL  when deliver_package() returns
+            # Exit: → SURVEIL / RTL when deliver_package() returns
             # -----------------------------------------------------------------
             elif self.mission_mode == MISSION_MODE_DELIVER:
 
@@ -752,14 +867,38 @@ class DroneMission:
                 delivered = self.deliver_package(center, frm_display)
 
                 if delivered:
-                    # ── TRANSITION: DELIVER → RTL ──────────────────────────────
-                    self.log_info("[DELIVER → RTL] Delivery complete. "
-                                  "Commanding return-to-launch.")
-                    self.mission_mode = MISSION_MODE_RTL
-                    drone_lib.return_to_launch(self.drone)
+                    if self.post_delivery_surveillance_enabled:
+                        self.log_info("[DELIVER → SURVEIL] Delivery complete. "
+                                      "Starting figure-eight surveillance.")
+                        self.mission_mode = MISSION_MODE_SURVEIL
+                    else:
+                        self.log_info("[DELIVER → RTL] Delivery complete. "
+                                      "Commanding return-to-launch.")
+                        self.mission_mode = MISSION_MODE_RTL
+                        drone_lib.return_to_launch(self.drone)
                 else:
                     self.log_info("[DELIVER] Delivery did not complete; "
                                   "remaining in DELIVER for the next loop.")
+
+            # -----------------------------------------------------------------
+            # STATE: SURVEIL
+            # -----------------------------------------------------------------
+            elif self.mission_mode == MISSION_MODE_SURVEIL:
+
+                self.log_info("[SURVEIL] Post-delivery surveillance in progress...")
+                if frame is not None:
+                    cv2.putText(frm_display, "Figure-eight surveillance...",
+                                (10, 400), IMG_FONT, 1, (0, 255, 255), 2, cv2.LINE_AA)
+
+                surveyed = self.conduct_post_delivery_surveillance(frm_display)
+                if surveyed:
+                    self.log_info("[SURVEIL → RTL] Surveillance complete. "
+                                  "Commanding return-to-launch.")
+                else:
+                    self.log_info("[SURVEIL → RTL] Surveillance ended early. "
+                                  "Commanding return-to-launch.")
+                self.mission_mode = MISSION_MODE_RTL
+                drone_lib.return_to_launch(self.drone)
 
             # -----------------------------------------------------------------
             # STATE: RTL
@@ -784,6 +923,7 @@ class DroneMission:
                 MISSION_MODE_CONFIRM: "CONFIRM",
                 MISSION_MODE_TARGET:  "TARGET",
                 MISSION_MODE_DELIVER: "DELIVER",
+                MISSION_MODE_SURVEIL: "SURVEIL",
                 MISSION_MODE_RTL:     "RTL",
             }
             cv2.putText(frm_display,
@@ -805,6 +945,47 @@ class DroneMission:
         self.log_info("=" * 60)
         self.log_info("MISSION LOOP ENDED")
         self.log_info("=" * 60)
+
+
+def wait_for_arm_ready(drone, timeout_s: float, log) -> bool:
+    """
+    Wait for the autopilot to report a usable position solution before arming.
+
+    This avoids repeatedly attempting to arm while EKF/GPS are still
+    initializing, which produces noisy pre-arm errors and leaves the startup
+    sequence looking hung to the operator.
+    """
+    deadline = time.time() + timeout_s
+    last_status = None
+
+    while time.time() < deadline:
+        gps = getattr(drone, "gps_0", None)
+        fix_type = getattr(gps, "fix_type", None)
+        sat_count = getattr(gps, "satellites_visible", None)
+        is_armable = bool(getattr(drone, "is_armable", False))
+        ekf_ok = bool(getattr(drone, "ekf_ok", False))
+
+        status = (
+            f"is_armable={is_armable}  ekf_ok={ekf_ok}  "
+            f"gps_fix={fix_type}  sats={sat_count}"
+        )
+        if status != last_status:
+            log.info("Waiting for position estimate before arming: %s", status)
+            last_status = status
+
+        if is_armable and ekf_ok and (fix_type is None or fix_type >= 3):
+            log.info("Autopilot ready to arm: %s", status)
+            return True
+
+        time.sleep(1.0)
+
+    log.error(
+        "Timed out after %.0f s waiting for position estimate.  "
+        "Last status: %s",
+        timeout_s,
+        last_status or "unknown",
+    )
+    return False
 
 
 # =============================================================================
@@ -923,6 +1104,11 @@ if __name__ == '__main__':
         exit(99)
 
     # ── Arm and take off ──────────────────────────────────────────────────────
+    if not wait_for_arm_ready(drone, ARM_READY_TIMEOUT_S, log):
+        log.info("Exiting before arm because the autopilot never produced a "
+                 "usable position estimate.")
+        raise SystemExit(1)
+
     drone_lib.arm_device(drone, log=log)
     drone_lib.device_takeoff(drone, config.takeoff_altitude_m, log=log)
 

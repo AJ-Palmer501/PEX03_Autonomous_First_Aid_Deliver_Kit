@@ -128,6 +128,11 @@ class MissionConfig:
     target_acceptance_radius_px: int    = 10
     update_rate: int                    = 1
     image_log_rate: int                 = 4
+    post_delivery_surveillance_enabled: bool = True
+    surveillance_figure8_count: int     = 4
+    surveillance_figure8_radius_m: float = 6.0
+    surveillance_altitude_m: float      = 10.0
+    surveillance_airspeed_mps: float    = 2.0
 
     # ── Runtime-only fields (never read from JSON) ────────────────────────────
     # camera_tilt_measured_deg is populated by __main__ after the IMU tilt
@@ -329,4 +334,10 @@ class MissionConfig:
                  cfg.tracker_misses_max, cfg.histo_match_threshold)
         LOG.info("  Mission       : confirm_attempts=%d  radius_px=%d",
                  cfg.max_confirm_attempts, cfg.target_acceptance_radius_px)
+        LOG.info("  Surveillance  : enabled=%s  count=%d  radius=%.1f m  alt=%.1f m  speed=%.1f m/s",
+                 cfg.post_delivery_surveillance_enabled,
+                 cfg.surveillance_figure8_count,
+                 cfg.surveillance_figure8_radius_m,
+                 cfg.surveillance_altitude_m,
+                 cfg.surveillance_airspeed_mps)
         LOG.info("=" * 56)
